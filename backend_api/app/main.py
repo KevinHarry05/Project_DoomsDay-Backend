@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import close_pool, init_pool
-from .routers import anomalies, ask, compare, forecast, historical
+from .routers import anomalies, ask, compare, cost_impact, forecast, historical
 
 app = FastAPI(
     title="Smart Building Energy Forecasting & Anomaly Detection API",
@@ -41,6 +41,7 @@ app.include_router(forecast.router)
 app.include_router(historical.router)
 app.include_router(compare.router)
 app.include_router(anomalies.router)
+app.include_router(cost_impact.router)
 app.include_router(ask.router)
 
 
