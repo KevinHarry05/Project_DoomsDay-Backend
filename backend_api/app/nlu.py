@@ -96,23 +96,63 @@ def _find_severity(text: str) -> Optional[str]:
     return None
 
 
+_COMPARE_WORDS = (
+    "which model", "best model", "compare model", "model win", "ranking",
+    "top model", "winning model", "most accurate", "accuracy comparison",
+    "wape", "model performance", "better model", "model comparison",
+    "leaderboard", "rank the model", "score the model", "compare",
+)
+
+_ANOMALY_WORDS = (
+    "anomaly", "anomalies", "unusual", "spike", "outage", "alert",
+    "critical", "situation", "issue", "problem", "concern", "abnormal",
+    "irregular", "warning", "risk", "emergency", "flagged", "flag",
+    "trouble", "weird", "strange", "odd", "deviation", "fault", "glitch",
+    "malfunction", "off-track", "off track", "wrong", "surge", "drop-off",
+    "dropoff", "unexpected", "red flag", "incident",
+)
+
+_HISTORICAL_WORDS = (
+    "was", "were", "usage", "demand", "actual", "history", "historical",
+    "recorded", "logged", "recent", "past", "previous", "yesterday", "ago",
+    "so far", "up to now", "already happened", "real value", "real usage",
+)
+
+_FORECAST_WORDS = (
+    "forecast", "predict", "prediction", "predicted", "expected", "next",
+    "upcoming", "outlook", "projection", "projected", "future", "tomorrow",
+    "today", "now", "current", "estimate", "estimated", "will be", "going to",
+    "coming hours", "coming days", "ahead",
+)
+
+_DEMAND_WORDS = ("demand", "energy", "usage", "consumption", "load", "power")
+
+
 def parse_query(text: str) -> ParsedQuery:
     low = text.lower()
     region = _find_region(text)
 
-    if any(k in low for k in ("which model", "best model", "compare model", "model win", "ranking")):
+    if any(k in low for k in _COMPARE_WORDS):
         return ParsedQuery(intent="compare", region=region, raw_text=text)
 
-    if any(k in low for k in ("anomaly", "anomalies", "unusual", "spike", "outage", "alert")):
+    if any(k in low for k in _ANOMALY_WORDS):
         return ParsedQuery(intent="anomalies", region=region, severity=_find_severity(text), raw_text=text)
 
     days_ago = _find_days_ago(text)
-    if days_ago is not None and any(k in low for k in ("was", "were", "usage", "demand", "actual", "history", "historical")):
+    if days_ago is not None and any(k in low for k in _HISTORICAL_WORDS):
         return ParsedQuery(intent="historical", region=region, days_ago=days_ago, raw_text=text)
 
     hours = _find_hour_count(text)
-    if any(k in low for k in ("forecast", "predict", "expected", "next", "upcoming")) or hours:
+    if any(k in low for k in _FORECAST_WORDS) or hours:
         horizon_list = horizons_up_to(hours or 1) or [1]
         return ParsedQuery(intent="forecast", region=region, horizons=horizon_list, raw_text=text)
+
+    # A region plus a bare demand/energy word ("what is the energy demand in
+    # DOM") doesn't name forecast/historical/compare/anomalies explicitly, but
+    # asking the user to disambiguate every time is bad UX for the single most
+    # obvious reading: "show me the current outlook". Default to a 1h forecast
+    # rather than falling through to "unknown" for this shape specifically.
+    if region and any(k in low for k in _DEMAND_WORDS):
+        return ParsedQuery(intent="forecast", region=region, horizons=horizons_up_to(1) or [1], raw_text=text)
 
     return ParsedQuery(intent="unknown", region=region, raw_text=text)

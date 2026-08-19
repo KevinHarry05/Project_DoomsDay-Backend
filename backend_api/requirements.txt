@@ -3,3 +3,4 @@ uvicorn[standard]>=0.29
 psycopg2-binary>=2.9
 pydantic>=2.6
 python-dateutil>=2.9
+requests>=2.31
