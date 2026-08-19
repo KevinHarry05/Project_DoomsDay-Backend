@@ -1,0 +1,122 @@
+# ============================================================================
+# DHR + ARIMA Energy Demand Forecasting - Configuration
+# Statistical track of the Smart Building Energy Forecasting project.
+# ============================================================================
+
+project:
+  model_name: "DHR_ARIMA"
+  model_type: "statistical"
+  model_version: "1.0.0"
+  code_version: "dhr-arima-2026.08"
+
+paths:
+  raw_data_dir: "/mnt/user-data/uploads/BACKEND/clean_dataset"
+  output_dir: "outputs"
+
+data:
+  timestamp_col: "Datetime_UTC"
+  target_col: "Demand_MW"
+  region_col: "Load_Area"
+  missing_flag_col: "Missing_Flag"
+  freq: "h"
+  reindex_full_hourly_grid: true
+
+regions:
+  all:
+    - AEP
+    - COMED
+    - DAYTON
+    - DEOK
+    - DOM
+    - DUQ
+    - EKPC
+    - FE
+    - NI
+    - PJM_Load
+    - PJME
+    - PJMW
+  default_run:
+    - AEP
+
+horizons:
+  # 1-24h matches LightGBM's set exactly, so those cells stay genuinely
+  # competitive in v_model_ranking. 48h-168h (2-7 days) is the DHR+ARIMA /
+  # PatchTST comparison band - both are trained here; PatchTST currently
+  # wins most of that range (see the live DB comparison queries), and
+  # DHR-ARIMA still competes and is faster to produce.
+  #
+  # A 4-month (2928h) extension WAS tested (see
+  # LONG_HORIZON_EXPERIMENT.md) and deliberately reverted: WAPE does not
+  # plateau at a usable level past 168h - it climbs past 90% mean WAPE by
+  # ~6 weeks out and exceeds 100% (worse than predicting nothing useful) for
+  # at least one region by 4 months. 168h (7 days) is the honest ceiling for
+  # this model as currently built.
+  supported: [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 48, 72, 96, 120, 144, 168]
+
+dhr:
+  # Dynamic Harmonic Regression: seasonality is captured by Fourier terms in
+  # the regression, NOT by seasonal ARIMA terms. This is the entire point of
+  # DHR - a seasonal ARIMA with period 24 or 168 on hourly data is extremely
+  # expensive; encoding the same cycles as a handful of sine/cosine regressors
+  # lets the ARIMA part stay a small, cheap, non-seasonal model that only has
+  # to explain what the harmonics leave behind (short-run autocorrelation).
+  feature_version: "dhr-1.0.0"
+  fourier_orders:
+    daily: 4     # period 24h
+    weekly: 3    # period 168h
+    yearly: 6    # period 8766h (365.25 * 24)
+  add_holiday_regressor: true
+  add_holiday_adjacency: true
+  holiday_country: "US"
+  add_linear_trend: true
+
+arima:
+  # Fixed, deliberately small non-seasonal order. A per-region AIC grid search
+  # (auto-ARIMA equivalent) is the natural next step but is expensive to run
+  # for 12 regions at 45k-145k observations each inside this build pass; see
+  # the README limitations section. (p, d, q):
+  order: [2, 0, 2]
+  trend: null          # exog already carries the mean/trend/seasonality
+  enforce_stationarity: false
+  enforce_invertibility: false
+  fit_method: "lbfgs"
+  fit_maxiter: 60
+
+split:
+  method: "fraction"
+  train_frac: 0.70
+  val_frac: 0.15
+  test_frac: 0.15
+  # No embargo needed on the ARIMA side the way LightGBM needs one: the model
+  # never uses a label-derived feature that could bleed across a boundary. The
+  # split boundary itself is exact - train literally ends where val begins.
+
+forecast:
+  # DHR+ARIMA does not use LightGBM's "one booster per horizon, one row per
+  # hour" approach. Instead the fitted model's STATE is advanced through
+  # val+test in blocks (no re-estimation of parameters), and a genuine
+  # multi-step forecast is drawn from the state at each block boundary. This
+  # mirrors how a statistical forecasting service is actually operated
+  # (state refreshed on a cadence, not re-fit every hour) and matches the
+  # project's own "give me the next 24 hours" daily-operational framing.
+  origin_cadence_hours: 24
+  max_horizon_hours: 168    # must be >= max(horizons.supported); covers 1h-7d
+                            # (a 4-month extension was tried and reverted -
+                            # see LONG_HORIZON_EXPERIMENT.md)
+
+evaluation:
+  metrics: ["mae", "rmse", "wape", "smape"]
+  primary_split: "test"
+  primary_metric: "wape"
+  smape_epsilon: 1.0
+
+database:
+  env_var: "DATABASE_URL"
+  schema: "public"
+  batch_size: 10000
+  write_forecast_splits: ["test"]
+  statement_timeout_ms: 300000
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)-8s | %(name)-22s | %(message)s"

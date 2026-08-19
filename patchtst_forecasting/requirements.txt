@@ -1,0 +1,6 @@
+torch>=2.0
+pandas
+numpy
+pyyaml
+psycopg2-binary
+pyarrow

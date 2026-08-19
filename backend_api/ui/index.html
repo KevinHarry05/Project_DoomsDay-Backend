@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Energy Forecasting & Anomaly Detection - Ask</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #161d2e; --border: #2a3450; --text: #e8ecf5;
+    --muted: #8a93ab; --accent: #4f8cff; --accent-dim: #2b3a5c;
+    --ok: #38c172; --warn: #f5a623; --crit: #e5484d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: var(--bg); color: var(--text); padding: 32px 20px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+  .bar {
+    display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;
+  }
+  input[type=text] {
+    flex: 1; min-width: 260px; padding: 12px 14px; font-size: 15px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); outline: none;
+  }
+  input[type=text]:focus { border-color: var(--accent); }
+  input[type=url] {
+    width: 260px; padding: 10px 12px; font-size: 13px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--muted);
+  }
+  button {
+    padding: 12px 20px; font-size: 15px; font-weight: 600; border: none; border-radius: 8px;
+    background: var(--accent); color: white; cursor: pointer;
+  }
+  button:hover { background: #3f78e0; }
+  button:disabled { background: var(--accent-dim); cursor: default; }
+  .loc-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .ghost-btn {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    padding: 8px 14px; font-size: 13px; font-weight: 500; border-radius: 8px;
+  }
+  .ghost-btn:hover { border-color: var(--accent); color: var(--accent); background: transparent; }
+  .ghost-btn:disabled { opacity: .5; cursor: default; }
+  .loc-status { font-size: 12.5px; color: var(--muted); }
+  .loc-status.ok { color: var(--ok); }
+  .loc-status.err { color: var(--crit); }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+  .chip {
+    font-size: 12.5px; color: var(--muted); background: var(--panel);
+    border: 1px solid var(--border); padding: 6px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .chip:hover { color: var(--text); border-color: var(--accent); }
+  .settings-row { font-size: 12px; color: var(--muted); margin-bottom: 20px; display:flex; align-items:center; gap:8px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; margin-top: 10px;
+  }
+  .meta { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  .meta b { color: var(--text); }
+  .table-scroll { overflow-x: auto; max-width: 100%; }
+  table { border-collapse: collapse; font-size: 13.5px; min-width: 100%; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Reason is truncated to one line with an ellipsis + hover tooltip, not
+     wrapped - a wrapped paragraph per row made every row tall and the table
+     wide at the same time, which was worse than the original overflow. */
+  td.reason { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); cursor: help; }
+  .evidence { font-size: 12px; white-space: nowrap; }
+  .evidence-both { color: var(--crit); }
+  .evidence-stat { color: var(--accent); }
+  .evidence-if { color: var(--muted); }
+  .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .sev-CRITICAL { background: rgba(229,72,77,.18); color: var(--crit); }
+  .sev-HIGH { background: rgba(245,166,35,.18); color: var(--warn); }
+  .sev-MEDIUM { background: rgba(79,140,255,.18); color: var(--accent); }
+  .sev-LOW { background: rgba(255,255,255,.08); color: var(--muted); }
+  .err { color: var(--crit); font-size: 14px; }
+  .empty { color: var(--muted); font-size: 14px; padding: 20px 0; text-align: center; }
+  .loading { color: var(--muted); font-size: 14px; }
+  .footer-note { color: var(--muted); font-size: 12px; margin-top: 28px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Smart Building Energy Forecasting &amp; Anomaly Detection</h1>
+  <div class="sub">Ask a question in plain English. Answers are pulled live from Postgres via the backend API.</div>
+
+  <div class="bar">
+    <input id="q" type="text" placeholder='e.g. "next 3 hour usage for AEP"' autofocus />
+    <button id="askBtn" onclick="ask()">Ask</button>
+  </div>
+
+  <div class="loc-row">
+    <button id="locBtn" class="ghost-btn" onclick="detectRegion()">📍 Use my location</button>
+    <span id="locStatus" class="loc-status"></span>
+  </div>
+
+  <div class="examples">
+    <span class="chip" onclick="setQ(this)">next 3 hour usage for AEP</span>
+    <span class="chip" onclick="setQ(this)">previous day same time usage for AEP</span>
+    <span class="chip" onclick="setQ(this)">which model is best for PJME</span>
+    <span class="chip" onclick="setQ(this)">any critical anomalies in DOM</span>
+    <span class="chip" onclick="setQ(this)">show me anomalies for EKPC</span>
+    <span class="chip" onclick="setQ(this)">next 24 hours for COMED</span>
+  </div>
+
+  <div class="settings-row">
+    API base URL: <input id="apiBase" type="url" value="http://127.0.0.1:8000" />
+    <span id="health" style="margin-left:6px;"></span>
+  </div>
+
+  <div id="out"></div>
+
+  <div class="footer-note">
+    Backed by <code>POST /ask</code> on the FastAPI service. If you see a network error, make sure
+    <code>uvicorn app.main:app --port 8000</code> is running locally first.
+  </div>
+</div>
+
+<script>
+// Approximate service-territory centers for each PJM region in this dataset.
+// PJM regions are irregular utility footprints, not points - this is a
+// nearest-centroid heuristic for a live demo, not an authoritative geofence
+// lookup. Labeled as such in the UI so it's defensible if asked about
+// precision. Coordinates are the rough center of each utility's home city/
+// service area; PJM_Load is the whole-footprint aggregate so it's given the
+// PJM system's approximate geographic center rather than one city.
+const REGION_CENTROIDS = [
+  { code: 'AEP',      label: 'AEP (Ohio / Appalachia)',        lat: 39.96, lng: -82.99 },
+  { code: 'COMED',    label: 'ComEd (Chicago, IL)',             lat: 41.88, lng: -87.63 },
+  { code: 'DAYTON',   label: 'Dayton Power & Light (Dayton, OH)', lat: 39.76, lng: -84.19 },
+  { code: 'DEOK',     label: 'Duke Energy Ohio/Kentucky (Cincinnati)', lat: 39.10, lng: -84.51 },
+  { code: 'DOM',      label: 'Dominion Energy (Richmond, VA)',  lat: 37.54, lng: -77.44 },
+  { code: 'DUQ',      label: 'Duquesne Light (Pittsburgh, PA)', lat: 40.44, lng: -79.99 },
+  { code: 'EKPC',     label: 'East Kentucky Power Coop (Winchester, KY)', lat: 38.00, lng: -84.18 },
+  { code: 'FE',       label: 'FirstEnergy (Akron, OH)',         lat: 41.08, lng: -81.52 },
+  { code: 'NI',       label: 'NIPSCO (Merrillville, IN)',       lat: 41.48, lng: -87.33 },
+  { code: 'PJM_Load', label: 'PJM system-wide aggregate',       lat: 39.00, lng: -80.50 },
+  { code: 'PJME',     label: 'PJM East (Pennsylvania / NJ)',    lat: 40.27, lng: -76.88 },
+  { code: 'PJMW',     label: 'PJM West (Ohio Valley)',          lat: 40.00, lng: -82.50 },
+];
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function nearestRegion(lat, lng) {
+  let best = null, bestDist = Infinity;
+  for (const r of REGION_CENTROIDS) {
+    const d = haversineKm(lat, lng, r.lat, r.lng);
+    if (d < bestDist) { bestDist = d; best = r; }
+  }
+  return { ...best, distanceKm: Math.round(bestDist) };
+}
+
+function detectRegion() {
+  const btn = document.getElementById('locBtn');
+  const status = document.getElementById('locStatus');
+  if (!navigator.geolocation) {
+    status.className = 'loc-status err';
+    status.textContent = 'Geolocation is not supported in this browser.';
+    return;
+  }
+  btn.disabled = true;
+  status.className = 'loc-status';
+  status.textContent = 'Requesting location…';
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const { latitude, longitude } = pos.coords;
+      const region = nearestRegion(latitude, longitude);
+      status.className = 'loc-status ok';
+      status.textContent =
+        `Nearest region: ${region.label} [${region.code}] (~${region.distanceKm} km away, approximate)`;
+
+      const q = document.getElementById('q');
+      const current = q.value.trim();
+      const hasRegionWord = REGION_CENTROIDS.some(r => current.toUpperCase().includes(r.code.toUpperCase()));
+      if (!current) {
+        q.value = `next 3 hour usage for ${region.code}`;
+      } else if (!hasRegionWord) {
+        q.value = `${current} for ${region.code}`;
+      }
+      btn.disabled = false;
+      ask();
+    },
+    (err) => {
+      status.className = 'loc-status err';
+      const messages = {
+        1: 'Location permission denied. Allow location access in your browser to use this.',
+        2: 'Location unavailable right now.',
+        3: 'Location request timed out.',
+      };
+      status.textContent = messages[err.code] || `Could not get location: ${err.message}`;
+      btn.disabled = false;
+    },
+    { enableHighAccuracy: false, timeout: 8000 }
+  );
+}
+
+function setQ(el) {
+  document.getElementById('q').value = el.textContent;
+  ask();
+}
+
+function base() {
+  return document.getElementById('apiBase').value.replace(/\/$/, '');
+}
+
+async function checkHealth() {
+  const el = document.getElementById('health');
+  try {
+    const r = await fetch(base() + '/health');
+    if (r.ok) { el.textContent = '● connected'; el.style.color = '#38c172'; }
+    else throw new Error();
+  } catch {
+    el.textContent = '● unreachable'; el.style.color = '#e5484d';
+  }
+}
+checkHealth();
+setInterval(checkHealth, 8000);
+
+function fmtNum(v) {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'number') return v.toLocaleString(undefined, {maximumFractionDigits: 2});
+  return v;
+}
+
+function fmtTs(v) {
+  if (!v) return '—';
+  return String(v).replace('T', '  ').replace(/\+.*$/, '');
+}
+
+function severityBadge(sev) {
+  if (!sev) return '';
+  return `<span class="badge sev-${sev}">${sev}</span>`;
+}
+
+// Severity is about detector AGREEMENT, not score magnitude (see reason text) -
+// a modest score can be HIGH if both the statistical and Isolation Forest
+// detectors independently fired, while a large score can be MEDIUM if only
+// one did. This surfaces that agreement directly instead of leaving it
+// buried in the full reason sentence.
+function evidenceBadge(reason) {
+  if (!reason) return '';
+  if (reason.includes('both statistical and Isolation Forest')) {
+    return '<span class="evidence evidence-both">Both detectors</span>';
+  }
+  if (reason.includes('statistical residual evidence only')) {
+    return '<span class="evidence evidence-stat">Statistical only</span>';
+  }
+  if (reason.includes('Isolation Forest calendar-pattern')) {
+    return '<span class="evidence evidence-if">Calendar pattern only</span>';
+  }
+  return '';
+}
+
+function shortReason(reason) {
+  if (!reason) return '—';
+  // First clause up to the composite-score mention is the human-readable
+  // summary; the rest (raw scores, event id) is detail kept in the tooltip.
+  const cut = reason.indexOf(', composite score');
+  return cut > -1 ? reason.slice(0, cut) : reason;
+}
+
+function renderTable(rows, columns) {
+  if (!rows || rows.length === 0) return '<div class="empty">No rows returned.</div>';
+  const cellClass = c => [c.num ? 'num' : '', c.cls || ''].filter(Boolean).join(' ');
+  const head = columns.map(c => {
+    const cls = cellClass(c);
+    return `<th${cls ? ` class="${cls}"` : ''}>${c.label}</th>`;
+  }).join('');
+  const body = rows.map(r => {
+    const cells = columns.map(c => {
+      const raw = r[c.key];
+      const val = c.render ? c.render(raw, r) : (c.num ? fmtNum(raw) : (c.ts ? fmtTs(raw) : (raw ?? '—')));
+      const cls = cellClass(c);
+      const titleSrc = c.title ? c.title(raw, r) : ((!c.num && !c.render && typeof raw === 'string') ? raw : null);
+      const title = titleSrc ? ` title="${String(titleSrc).replace(/"/g, '&quot;')}"` : '';
+      return `<td${cls ? ` class="${cls}"` : ''}${title}>${val}</td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  return `<div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function renderResult(data) {
+  const { intent, parsed, result } = data;
+  let metaLine = `Intent: <b>${intent}</b>`;
+  if (parsed?.region) {
+    const centroid = REGION_CENTROIDS.find(r => r.code === parsed.region);
+    const friendly = centroid ? ` (${centroid.label})` : '';
+    metaLine += ` &nbsp;·&nbsp; Region: <b>${parsed.region}</b>${friendly}`;
+  }
+
+  let bodyHtml = '';
+
+  if (intent === 'forecast') {
+    metaLine += ` &nbsp;·&nbsp; Origin: <b>${fmtTs(result.forecast_timestamp)}</b>`;
+    if (result.missing_horizons?.length) {
+      metaLine += ` &nbsp;·&nbsp; <span style="color:#f5a623">missing horizons: ${result.missing_horizons.join(', ')}</span>`;
+    }
+    bodyHtml = renderTable(result.points, [
+      { key: 'horizon_hours', label: 'Horizon (h)', num: true },
+      { key: 'target_timestamp', label: 'Target time', ts: true },
+      { key: 'model_name', label: 'Model' },
+      { key: 'predicted_demand_mw', label: 'Predicted (MW)', num: true },
+      { key: 'actual_demand_mw', label: 'Actual (MW)', num: true },
+    ]);
+  } else if (intent === 'historical') {
+    const reading = result.reading;
+    bodyHtml = reading
+      ? renderTable([{ ...reading, match: result.match }], [
+          { key: 'timestamp_utc', label: 'Timestamp', ts: true },
+          { key: 'demand_mw', label: 'Demand (MW)', num: true },
+          { key: 'match', label: 'Match type' },
+        ])
+      : '<div class="empty">No historical reading found.</div>';
+  } else if (intent === 'compare') {
+    bodyHtml = renderTable(result.rankings, [
+      { key: 'region_code', label: 'Region' },
+      { key: 'horizon_hours', label: 'Horizon (h)', num: true },
+      { key: 'model_rank', label: 'Rank', num: true },
+      { key: 'model_name', label: 'Model' },
+      { key: 'wape', label: 'WAPE %', num: true },
+      { key: 'mae', label: 'MAE', num: true },
+      { key: 'rmse', label: 'RMSE', num: true },
+    ]);
+  } else if (intent === 'anomalies') {
+    bodyHtml = renderTable(result.anomalies, [
+      { key: 'region_code', label: 'Region' },
+      { key: 'timestamp_utc', label: 'Timestamp', ts: true },
+      { key: 'severity', label: 'Severity', render: severityBadge },
+      { key: 'reason', label: 'Evidence', render: evidenceBadge },
+      { key: 'anomaly_score', label: 'Score', num: true },
+      { key: 'actual_demand_mw', label: 'Actual (MW)', num: true },
+      { key: 'predicted_demand_mw', label: 'Predicted (MW)', num: true },
+      {
+        key: 'reason', label: 'Summary', cls: 'reason',
+        render: (raw) => shortReason(raw),
+        title: (raw) => raw,
+      },
+    ]);
+  } else {
+    bodyHtml = `<div class="empty">Could not classify this question.<br>${data?.detail?.hint ?? ''}</div>`;
+  }
+
+  return `<div class="card"><div class="meta">${metaLine}</div>${bodyHtml}</div>`;
+}
+
+// FastAPI's `detail` is a plain string for a simple HTTPException(400, "msg")
+// but a dict for the richer 422 (unclassifiable question) case - show
+// whichever shape actually came back instead of assuming one and silently
+// dropping the other.
+function renderError(status, detail) {
+  let message, hint, parsed;
+  if (typeof detail === 'string') {
+    message = detail;
+  } else if (detail && typeof detail === 'object') {
+    message = detail.message || 'Request failed.';
+    hint = detail.hint;
+    parsed = detail.parsed;
+  } else {
+    message = 'Request failed.';
+  }
+  return `
+    <div class="card">
+      <div class="err">Error ${status}: ${message}</div>
+      ${hint ? `<div class="empty" style="text-align:left;padding-top:10px;">${hint}</div>` : ''}
+      ${parsed ? `<div class="meta" style="margin-top:10px;">Parsed as: ${JSON.stringify(parsed)}</div>` : ''}
+    </div>`;
+}
+
+async function ask() {
+  const q = document.getElementById('q').value.trim();
+  const out = document.getElementById('out');
+  const btn = document.getElementById('askBtn');
+  if (!q) return;
+
+  btn.disabled = true;
+  out.innerHTML = '<div class="loading">Asking…</div>';
+
+  try {
+    const r = await fetch(base() + '/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: q }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      out.innerHTML = renderError(r.status, data.detail);
+    } else {
+      out.innerHTML = renderResult(data);
+    }
+  } catch (e) {
+    out.innerHTML = `<div class="card"><div class="err">Network error: ${e.message}. Is the API running at ${base()}?</div></div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('q').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') ask();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+# ============================================================================
+# PatchTST Energy Demand Forecasting - Configuration
+# Deep-learning track of the Smart Building Energy Forecasting project.
+#
+# SCOPE DECISION (read this before touching the numbers below): this is a
+# deliberately scaled-down, CPU-trainable rebuild of the architecture in the
+# team's PatchTST/TFT notebook, NOT a port of that notebook. The notebook's
+# run never finished (interrupted mid batch 5,500/6,774 of epoch 1/30, no
+# checkpoint saved) and depends on a pre-built feature file that does not
+# exist in this environment. Everything here is rebuilt from clean_dataset
+# with a size/epoch budget chosen to actually finish training on a 2-thread
+# CPU sandbox, in exchange for materially worse accuracy than a full GPU run
+# would give. See README.md "Scope and limitations" for the honest version.
+# ============================================================================
+
+project:
+  model_name: "PatchTST"
+  model_type: "deep_learning"
+  model_version: "1.0.0-cpu-lite"
+  code_version: "patchtst-2026.08"
+
+paths:
+  # Relative to this package's own folder (patchtst_forecasting/), NOT an
+  # absolute cloud-sandbox path - resolves to <BACKEND>/clean_dataset as long
+  # as this package sits directly under the same BACKEND folder as
+  # clean_dataset, statistical_forecasting, lightgbm_forecasting, etc.
+  # Override with --config pointing at a copy of this file if your layout
+  # differs, or edit this one value.
+  raw_data_dir: "../clean_dataset"
+  output_dir: "outputs"
+
+data:
+  timestamp_col: "Datetime_UTC"
+  target_col: "Demand_MW"
+  region_col: "Load_Area"
+  missing_flag_col: "Missing_Flag"
+  freq: "h"
+  reindex_full_hourly_grid: true
+
+regions:
+  all:
+    - AEP
+    - COMED
+    - DAYTON
+    - DEOK
+    - DOM
+    - DUQ
+    - EKPC
+    - FE
+    - NI
+    - PJM_Load
+    - PJME
+    - PJMW
+  default_run:
+    - AEP
+
+# PatchTST's differentiated role in the project's own model-selection table is
+# "24 hours -> several days/weeks, designed for long-sequence, multi-step
+# forecasting". These horizons are chosen to sit in that band and NOT overlap
+# 1-24h (LightGBM's strength) so the comparison view reflects each model's
+# actual designed-for range rather than three models fighting over hour 1-24.
+horizons:
+  supported: [24, 48, 72, 96, 120, 144, 168]
+
+sequence:
+  # One week of hourly history as context - long enough to give the model a
+  # full weekly seasonal cycle to look back on, short enough (168 steps) to
+  # stay cheap on CPU.
+  lookback_hours: 168
+  # Features per timestep fed into the patch embedding. All are cheap,
+  # already-available-at-inference-time signals (no future leakage): the
+  # scaled demand value plus cyclical calendar encodings.
+  feature_columns:
+    - demand_scaled
+    - hour_sin
+    - hour_cos
+    - dow_sin
+    - dow_cos
+    - month_sin
+    - month_cos
+    - is_weekend
+  # Origins are spaced 24h apart (one forecast per day per region), matching
+  # the same "daily operational" framing DHR+ARIMA uses, and is what keeps
+  # the number of training sequences small enough to train on 2 CPU threads.
+  origin_cadence_hours: 24
+  # Hard cap on total training+validation origins actually used, subsampled
+  # uniformly in time per region if there are more available than this. This
+  # is the single biggest lever keeping training time bounded - documented
+  # explicitly (not a silent truncation) in the run manifest and README.
+  max_origins_per_region: 700
+
+model:
+  # Roughly 10x smaller than the notebook's PatchTSTLightweight
+  # (d_model 128->32, layers 3->2, heads 8->2). Deliberate: this is the
+  # difference between a model that trains in minutes vs. hours on 2 CPU
+  # threads, at the cost of representational capacity.
+  patch_length: 16
+  patch_stride: 8
+  d_model: 32
+  n_heads: 2
+  n_layers: 2
+  dim_feedforward: 64
+  dropout: 0.10
+
+training:
+  # One shared/global model pooled across all 12 regions, exactly like the
+  # notebook's design - a single set of weights learns cross-region demand
+  # patterns instead of training 12 independent transformers, which is both
+  # far cheaper and closer to how PatchTST is normally used.
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  max_epochs: 12
+  patience: 3
+  grad_clip: 1.0
+  # Hard wall-clock ceiling as a second safety net on top of max_epochs /
+  # max_origins_per_region - if this is hit mid-epoch, training stops and
+  # whatever the best validation checkpoint was so far is used. Prevents an
+  # unexpectedly slow CPU from turning "quick to build" into an open-ended run.
+  max_train_minutes: 25
+  val_frac: 0.15
+  test_frac: 0.15
+  seed: 42
+
+evaluation:
+  metrics: ["mae", "rmse", "wape", "smape"]
+  primary_split: "test"
+  primary_metric: "wape"
+  smape_epsilon: 1.0
+
+database:
+  env_var: "DATABASE_URL"
+  schema: "public"
+  batch_size: 10000
+  write_forecast_splits: ["test"]
+  statement_timeout_ms: 300000
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)-8s | %(name)-22s | %(message)s"

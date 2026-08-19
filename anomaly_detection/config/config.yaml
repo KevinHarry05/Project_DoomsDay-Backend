@@ -1,0 +1,68 @@
+# ============================================================================
+# Anomaly Detection - Configuration
+# Third stage of the pipeline. Runs AFTER both forecasting tracks have loaded
+# their outputs into Postgres. Reads exclusively from v_selected_forecast, so
+# it never has to know which model (LightGBM, DHR_ARIMA, later PatchTST/TFT)
+# actually produced the winning forecast for any given (region, horizon) cell.
+# ============================================================================
+
+project:
+  name: "EnerSight-style hybrid anomaly detector"
+  code_version: "anomaly-2026.08"
+  detection_method: "ensight_hybrid_stat_if_v1"
+
+database:
+  env_var: "DATABASE_URL"
+  schema: "public"
+  batch_size: 10000
+  statement_timeout_ms: 300000
+  # anomalies must be scored per (region, horizon) group because DHR-ARIMA's
+  # 24h-ahead residual has a completely different scale than its 1h-ahead
+  # residual - pooling horizons together would treat a routine 8h-ahead miss
+  # as anomalous relative to a 1h-ahead baseline. This is the one deliberate
+  # extension made to the notebook's original per-region-only grouping.
+  group_by: ["region_code", "horizon_hours"]
+
+statistical:
+  # Robust (median/MAD) residual baseline - same reasoning as the LightGBM
+  # anomaly module: a mean/std baseline lets its own outliers inflate the
+  # scale used to detect them.
+  mad_epsilon: 1.0e-6
+  mad_to_sigma: 0.6745        # notebook's exact scaling constant for Robust_Z
+  z_cap: 10.0
+  pct_cap: 50.0
+  rolling_window_hours: 24
+  rolling_min_periods: 12
+  weight_historical: 0.30
+  weight_rolling: 0.30
+  weight_percentage: 0.20
+  weight_ramp: 0.20
+  statistical_threshold: 3.0   # composite score >= this -> statistical candidate
+
+isolation_forest:
+  n_estimators: 300
+  contamination: 0.01
+  random_state: 42
+  # cyclical calendar features only - deliberately NOT raw MW, so a large
+  # region (PJME) and a small one (EKPC) are not biased against each other by
+  # magnitude alone.
+  features: ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos"]
+
+severity_bands:
+  critical: 7.0
+  high: 5.0
+  medium: 3.5
+  low: 2.5
+
+event_grouping:
+  # consecutive flagged hours within this gap are treated as one continuous
+  # event rather than N separate anomaly rows - mirrors the notebook's
+  # Event_Candidate_ID logic.
+  max_gap_hours: 1
+
+output:
+  dir: "outputs"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)-8s | %(name)-22s | %(message)s"

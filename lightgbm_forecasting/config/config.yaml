@@ -1,0 +1,166 @@
+# ============================================================================
+# LightGBM Energy Demand Forecasting - Configuration
+# Project: Smart Building Energy Forecasting & Anomaly Detection
+# Member: ML / LightGBM track
+# ============================================================================
+
+project:
+  model_name: "LightGBM"          # -> model_runs.model_name
+  model_type: "machine_learning"  # -> model_runs.model_type
+  model_version: "1.0.0"          # -> model_runs.model_version (recommended col)
+  code_version: "lgbm-2026.08"    # embedded in run_uid for reproducibility
+
+paths:
+  # Directory holding <REGION>_clean.csv files
+  raw_data_dir: "/mnt/user-data/uploads/BACKEND/clean_dataset"
+  output_dir: "outputs"
+
+data:
+  timestamp_col: "Datetime_UTC"
+  target_col: "Demand_MW"
+  region_col: "Load_Area"
+  missing_flag_col: "Missing_Flag"
+  freq: "h"
+  # Reindex each region onto a complete hourly grid so lag/rolling windows are
+  # true clock-hour offsets rather than positional offsets across gaps.
+  reindex_full_hourly_grid: true
+
+regions:
+  # Canonical 12 PJM region codes. Must match regions.region_code in PostgreSQL.
+  all:
+    - AEP
+    - COMED
+    - DAYTON
+    - DEOK
+    - DOM
+    - DUQ
+    - EKPC
+    - FE
+    - NI
+    - PJM_Load
+    - PJME
+    - PJMW
+  # Default subset for a fast end-to-end run. Override with --regions on CLI.
+  default_run:
+    - AEP
+    - COMED
+    - DAYTON
+
+horizons:
+  # Direct multi-horizon strategy: one independent booster per (region, horizon).
+  # Cross-horizon set so "next N hours" queries resolve for any of these N
+  # directly, not just 1/6/12/24. Declared here so the integration layer can
+  # record exactly which horizons are supported.
+  supported: [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24]
+
+features:
+  feature_version: "fe-1.0.0"
+  # Demand-history lags measured from the FORECAST ORIGIN t (lag_0 = demand at t).
+  lags: [0, 1, 2, 3, 4, 6, 12, 18, 23, 24, 25, 47, 48, 72, 96, 120, 144, 167, 168, 169, 336, 504]
+  rolling_windows: [3, 6, 12, 24, 48, 168, 336, 720]
+  rolling_stats: ["mean", "std", "min", "max"]
+  # Differences of the demand series, all evaluated at or before origin t.
+  diff_lags: [1, 24, 168]
+  ewm_halflives: [6, 24, 168]
+  holiday_country: "US"
+  add_holiday_adjacency: true   # day-before / day-after holiday flags
+  add_fourier_terms: true
+  fourier_orders:
+    daily: 3
+    weekly: 2
+    yearly: 3
+
+split:
+  # Chronological only. Never random - this is a time-series problem.
+  method: "fraction"        # "fraction" | "date"
+  train_frac: 0.70
+  val_frac: 0.15
+  test_frac: 0.15
+  # Used only when method == "date" (inclusive lower / exclusive upper, UTC)
+  train_end: "2016-01-01T00:00:00Z"
+  val_end: "2017-01-01T00:00:00Z"
+  # Gap (in hours) inserted between splits to prevent window bleed-through.
+  # Must be >= max(horizon) so no training target overlaps a validation origin.
+  embargo_hours: 24
+
+model:
+  params:
+    objective: "regression_l1"     # MAE-aligned; robust, matches WAPE/MAE selection metric
+    metric: ["l1", "l2"]
+    boosting_type: "gbdt"
+    learning_rate: 0.05
+    num_leaves: 64
+    max_depth: -1
+    min_data_in_leaf: 40
+    feature_fraction: 0.85
+    bagging_fraction: 0.85
+    bagging_freq: 1
+    lambda_l1: 0.0
+    lambda_l2: 1.0
+    max_bin: 255
+    verbosity: -1
+    n_jobs: -1
+    seed: 42
+  num_boost_round: 3000
+  early_stopping_rounds: 100
+  log_evaluation_period: 200
+
+evaluation:
+  # Metrics persisted to model_evaluations
+  metrics: ["mae", "rmse", "wape", "smape"]
+  # Split whose metrics drive model comparison. Test = held-out chronological tail.
+  primary_split: "test"
+  primary_metric: "wape"
+  # sMAPE guard: ignore denominators below this to avoid explosion near zero
+  smape_epsilon: 1.0
+
+anomaly:
+  # OFF by default. Forecasting is being built and verified as its own stage
+  # first; anomaly detection is a second stage layered on top once forecasts
+  # are trusted, not something to run blind on day one. Turn on with
+  # --enable-anomaly on run_pipeline.py, or flip this to true.
+  enabled: false
+  # Anomaly detection must run against ONE clearly defined forecast.
+  # Within this package we score LightGBM's own residuals at a single horizon.
+  # Final cross-model selection is the integration layer's responsibility.
+  detection_horizon_hours: 1
+  detection_method: "lgbm_residual_robust_z_v1"
+  # Threshold statistics are fitted on VALIDATION residuals ONLY.
+  # Not train: a boosted tree's in-sample residuals are far tighter than its
+  # out-of-sample ones, so a train-fitted scale is too small and flags ~20% of
+  # test hours. Validation is out-of-sample AND strictly before test, so it is
+  # both realistic and leakage-free.
+  fit_on_splits: ["val"]
+  score_on_splits: ["test"]
+  # Robust z-score via median / MAD (scaled to sigma by 1.4826)
+  robust: true
+  severity_thresholds:
+    low: 2.5
+    medium: 3.5
+    high: 5.0
+    critical: 7.0
+  is_anomaly_min_score: 2.5
+  # Secondary guard so tiny regions do not flag trivial absolute deviations
+  min_abs_residual_mw: 0.0
+  min_deviation_percent: 0.0
+
+retrain:
+  # Minimum hours of NEW local data (beyond this model+region's last recorded
+  # training_end) before scheduled_retrain.py will bother retraining. Below
+  # this, the retrain would be a byte-for-byte repeat of the last run - not
+  # worth the compute. One week by default; lower it for a region you expect
+  # to update more often, or use --force to bypass entirely.
+  min_new_hours: 168
+
+database:
+  # Credentials come from the DATABASE_URL environment variable ONLY.
+  # Never commit a connection string to this file.
+  env_var: "DATABASE_URL"
+  schema: "public"
+  batch_size: 10000
+  write_forecast_splits: ["test"]   # which split's predictions get persisted
+  statement_timeout_ms: 300000
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)-8s | %(name)-22s | %(message)s"

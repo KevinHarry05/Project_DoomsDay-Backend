@@ -1,0 +1,20 @@
+# LightGBM Energy Demand Forecasting - pinned to the versions this was built
+# and verified against.
+
+# Core modelling
+lightgbm==4.7.0
+numpy>=1.26,<3.0
+pandas>=2.1,<3.0
+scikit-learn>=1.3
+
+# Calendar features (US federal holidays for the PJM footprint)
+holidays>=0.50
+
+# Config
+PyYAML>=6.0
+
+# Columnar artefacts passed between stage 1 and stage 2
+pyarrow>=14.0
+
+# PostgreSQL integration (local and Supabase)
+psycopg2-binary>=2.9.9
